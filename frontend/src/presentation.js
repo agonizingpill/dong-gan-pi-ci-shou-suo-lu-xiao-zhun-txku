@@ -11,6 +11,7 @@ export const events = {
   'fit.queue': '提交试算', 'fit.retry': '重试试算', 'fit.failed': '计算失败', 'fit.completed': '试算完成',
   'retest.opened': '创建超窗复测单', 'retest.verified': '复测确认', 'retest.held': '复测留置',
   'release.sign': '主管签发', 'reference.archive': '认证参考批次',
+  'rework.trial': '登记返工预演', 'rework.select': '选定返工方案', 'rework.verify': '首炉核验',
 };
 
 export function h(value = '') {

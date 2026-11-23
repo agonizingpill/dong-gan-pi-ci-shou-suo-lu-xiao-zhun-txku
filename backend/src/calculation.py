@@ -22,6 +22,16 @@ def ridge_fit(x, y, target):
     return float(prediction), dict(zip(names, map(float, transformer.lambdas_))), dict(zip(names, map(float, model.coef_)))
 
 
+def predict(snapshot, features):
+    training = snapshot['training']
+    x = np.asarray([item['features'] for item in training], dtype=float)
+    y = np.asarray([item['observed'] for item in training], dtype=float)
+    prediction, _, _ = ridge_fit(x, y, np.asarray(features, dtype=float))
+    if not math.isfinite(prediction):
+        raise ValueError('模型产生非有限值，请检查参考工况的分布')
+    return round(prediction, 6)
+
+
 def estimate(snapshot):
     training = snapshot['training']
     x = np.asarray([item['features'] for item in training], dtype=float)

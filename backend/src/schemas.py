@@ -81,5 +81,11 @@ class RetestIn(Input):
         return self
 
 
+class ReworkTrialIn(Input):
+    vacuum_minutes: int = Field(ge=1, le=10080)
+    pressure_pa: FiniteFloat = Field(ge=0.01, le=120000)
+    shelf_c: FiniteFloat = Field(ge=-100, le=100)
+
+
 class DecisionIn(Input):
     note: Note

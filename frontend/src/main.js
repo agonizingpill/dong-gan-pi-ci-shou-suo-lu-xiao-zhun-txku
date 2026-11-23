@@ -136,6 +136,21 @@ const commands = {
     await draw();
     toast('批次放行已签发');
   },
+  reworkTrial: async data => {
+    await api.createReworkTrial(store.calibration.entry.id, data);
+    await draw();
+    toast('返工预演方案已登记');
+  },
+  selectTrial: async ({id}) => {
+    await api.selectReworkTrial(store.calibration.entry.id, id);
+    await draw();
+    toast('返工方案已选定为计划');
+  },
+  verifyRework: async () => {
+    await api.verifyRework(store.calibration.entry.id);
+    await draw();
+    toast('首炉核验已登记');
+  },
 };
 
 async function execute(action, payload, button) {
@@ -163,7 +178,7 @@ root.addEventListener('click', event => {
     form.elements.password.value = 'Lab-demo-1062';
     form.elements.username.focus();
   }
-  if (button?.dataset.action) execute(button.dataset.action, undefined, button);
+  if (button?.dataset.action) execute(button.dataset.action, button.dataset, button);
 });
 root.addEventListener('change', async event => {
   const target = event.target;

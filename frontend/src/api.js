@@ -42,6 +42,9 @@ export const api = {
   retry: id => request(`${fitPath(id)}/retry`, 'POST'),
   retest: (id, data) => request(`${fitPath(id)}/retest`, 'POST', data),
   release: (id, data) => request(`${fitPath(id)}/release`, 'POST', data),
+  createReworkTrial: (id, data) => request(`${fitPath(id)}/rework/trials`, 'POST', data),
+  selectReworkTrial: (id, trialId) => request(`${fitPath(id)}/rework/trials/${trialId}/select`, 'POST'),
+  verifyRework: id => request(`${fitPath(id)}/rework/verification`, 'POST'),
 };
 
 export async function loadInventory() {

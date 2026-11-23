@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 from . import ledger
 from .auth import identity, issue, require, valid_password
 from .db import session
-from .models import CalibrationRelease, ChamberRun, DryBatch, LabEvent, RecipeLot, Role, User
-from .schemas import BatchIn, CurveIn, DecisionIn, Login, RecipeIn, RetestIn, SampleIn
+from .models import CalibrationRelease, ChamberRun, DryBatch, LabEvent, RecipeLot, ReworkTrial, Role, User
+from .schemas import BatchIn, CurveIn, DecisionIn, Login, RecipeIn, RetestIn, ReworkTrialIn, SampleIn
 
 router = APIRouter()
 operator = require(Role.OPERATOR)
@@ -168,7 +168,43 @@ def detail(entry_id: int, db: Session = Depends(session)):
     events = db.scalars(select(LabEvent).filter_by(batch_code=batch.code).order_by(LabEvent.id.desc()).limit(30))
     return {'batch': ledger.row(batch), 'curve': ledger.row(run), 'entry': ledger.row(entry),
             'retest': [ledger.row(sample) for sample in ledger.samples_for(db, run.id, retest=True)],
+            'rework': ledger.rework_payload(db, batch, entry),
             'events': [ledger.row(event) for event in events]}
+
+
+@router.post('/calibrations/{entry_id}/rework/trials', status_code=201)
+def create_rework_trial(entry_id: int, payload: ReworkTrialIn, db: Session = Depends(session), user=Depends(lab_staff)):
+    batch, _, entry = calibration_context(db, entry_id, lock=True)
+    trial = ledger.add_rework_trial(db, batch, entry, payload, user.username)
+    db.commit()
+    return ledger.row(trial)
+
+
+@router.post('/calibrations/{entry_id}/rework/trials/{trial_id}/select')
+def select_rework_trial(entry_id: int, trial_id: int, db: Session = Depends(session), user=Depends(supervisor)):
+    batch, _, entry = calibration_context(db, entry_id, lock=True)
+    trial = db.get(ReworkTrial, trial_id)
+    if trial is None or trial.release_id != entry.id:
+        raise HTTPException(404, '预演方案不属于该校准单')
+    ledger.select_rework_trial(db, batch, entry, trial, user.username)
+    db.commit()
+    return ledger.row(trial)
+
+
+@router.post('/calibrations/{entry_id}/rework/verification')
+def verify_rework(entry_id: int, response: Response, db: Session = Depends(session), user=Depends(lab_staff)):
+    batch, _, entry = calibration_context(db, entry_id, lock=True)
+    verification, created = ledger.verify_rework(db, batch, entry, user.username)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        verification = ledger.verification_for(db, entry_id)
+        if verification is None:
+            raise
+        created = False
+    response.status_code = 201 if created else 200
+    return ledger.row(verification)
 
 
 @router.post('/calibrations/{entry_id}/retry', status_code=202)

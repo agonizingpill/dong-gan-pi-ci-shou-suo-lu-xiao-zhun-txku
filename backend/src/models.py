@@ -126,6 +126,34 @@ class CalibrationRelease(Base):
     attempts: Mapped[int] = mapped_column(default=0)
 
 
+class ReworkTrial(Base):
+    __tablename__ = 'rework_trials'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    release_id: Mapped[int] = mapped_column(ForeignKey('calibration_releases.id'), index=True)
+    vacuum_minutes: Mapped[int] = mapped_column()
+    pressure_pa: Mapped[float] = mapped_column(Double)
+    shelf_c: Mapped[float] = mapped_column(Double)
+    estimate_pct: Mapped[float] = mapped_column(Double)
+    created_by: Mapped[str] = mapped_column(String(32))
+    created_at = mapped_column(DateTime(), default=utcnow)
+    selected_by: Mapped[str | None] = mapped_column(String(32))
+    selected_at = mapped_column(DateTime(), nullable=True)
+
+
+class ReworkVerification(Base):
+    __tablename__ = 'rework_verifications'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    release_id: Mapped[int] = mapped_column(ForeignKey('calibration_releases.id'), unique=True)
+    trial_id: Mapped[int] = mapped_column(ForeignKey('rework_trials.id'))
+    run_id: Mapped[int] = mapped_column(ForeignKey('chamber_runs.id'))
+    vacuum_minutes: Mapped[int] = mapped_column()
+    pressure_pa: Mapped[float] = mapped_column(Double)
+    shelf_c: Mapped[float] = mapped_column(Double)
+    estimate_pct: Mapped[float] = mapped_column(Double)
+    submitted_by: Mapped[str] = mapped_column(String(32))
+    submitted_at = mapped_column(DateTime(), default=utcnow)
+
+
 class LabEvent(Base):
     __tablename__ = 'lab_events'
     id: Mapped[int] = mapped_column(primary_key=True)

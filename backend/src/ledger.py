@@ -8,9 +8,10 @@ from redis.exceptions import RedisError
 from sqlalchemy import inspect, select
 
 from .db import QUEUE, redis, utcnow
+from .calculation import predict
 from .models import (
     BatchState, CalibrationRelease, ChamberRun, DryBatch, LabEvent, Phase, RecipeLot,
-    ReleaseState, RunState, ShrinkageSample, Stage,
+    ReleaseState, ReworkTrial, ReworkVerification, RunState, ShrinkageSample, Stage,
 )
 
 log = logging.getLogger(__name__)
@@ -256,3 +257,100 @@ def sign_release(db, batch, run, release, actor, note):
     release.touched_at = release.signed_at
     batch.state = BatchState.RELEASED
     record(db, actor, 'release.sign', f'{run.source_name} · {note}', batch.code)
+
+
+def planned_features(snapshot, vacuum_minutes, pressure_pa, shelf_c):
+    features = list(snapshot['features'])
+    features[2:] = [vacuum_minutes, round(pressure_pa, 6), round(shelf_c, 6)]
+    return features
+
+
+def verification_for(db, release_id):
+    return db.scalar(select(ReworkVerification).filter_by(release_id=release_id))
+
+
+def selected_trial(db, release_id):
+    return db.scalar(select(ReworkTrial).where(ReworkTrial.release_id == release_id,
+                                               ReworkTrial.selected_by.isnot(None)).limit(1))
+
+
+def first_frozen_rework(db, batch, after_run_id):
+    return db.scalar(select(ChamberRun)
+                     .where(ChamberRun.batch_code == batch.code, ChamberRun.id > after_run_id,
+                            ChamberRun.state == RunState.FROZEN)
+                     .order_by(ChamberRun.id).limit(1))
+
+
+def add_rework_trial(db, batch, entry, payload, actor):
+    if entry.state != ReleaseState.HELD:
+        blocked(db, actor, 'rework.trial', '仅留置的校准单可以登记返工预演方案', batch.code)
+    if verification_for(db, entry.id):
+        blocked(db, actor, 'rework.trial', '首炉核验已登记，预演方案不再变更', batch.code)
+    estimate = predict(entry.snapshot, planned_features(
+        entry.snapshot, payload.vacuum_minutes, payload.pressure_pa, payload.shelf_c))
+    trial = ReworkTrial(release_id=entry.id, vacuum_minutes=payload.vacuum_minutes,
+                        pressure_pa=payload.pressure_pa, shelf_c=payload.shelf_c,
+                        estimate_pct=estimate, created_by=actor)
+    db.add(trial)
+    db.flush()
+    record(db, actor, 'rework.trial',
+           f'方案 #{trial.id} · 真空 {trial.vacuum_minutes} min / {trial.pressure_pa:g} Pa / '
+           f'{trial.shelf_c:g} °C · 估计 {estimate:.2f}%', batch.code)
+    return trial
+
+
+def select_rework_trial(db, batch, entry, trial, actor):
+    if entry.state != ReleaseState.HELD:
+        blocked(db, actor, 'rework.select', '仅留置的校准单可以选定返工方案', batch.code)
+    if verification_for(db, entry.id):
+        blocked(db, actor, 'rework.select', '首炉核验已登记，返工方案不可更改', batch.code)
+    for other in db.scalars(select(ReworkTrial).filter_by(release_id=entry.id)):
+        other.selected_by = None
+        other.selected_at = None
+    trial.selected_by = actor
+    trial.selected_at = utcnow()
+    record(db, actor, 'rework.select',
+           f'方案 #{trial.id} · 真空 {trial.vacuum_minutes} min / {trial.pressure_pa:g} Pa / {trial.shelf_c:g} °C',
+           batch.code)
+
+
+def verify_rework(db, batch, entry, actor):
+    if entry.state != ReleaseState.HELD:
+        blocked(db, actor, 'rework.verify', '仅留置的校准单可以登记首炉核验', batch.code)
+    existing = verification_for(db, entry.id)
+    if existing:
+        return existing, False
+    trial = selected_trial(db, entry.id)
+    if trial is None:
+        blocked(db, actor, 'rework.verify', '请主管先选定一组返工预演方案', batch.code)
+    run = first_frozen_rework(db, batch, entry.run_id)
+    if run is None:
+        blocked(db, actor, 'rework.verify', '首个返工炉次的曲线尚未冻结，冻结后再提交核验', batch.code)
+    recipe = db.get(RecipeLot, batch.recipe_code)
+    _, _, minutes, pressure, shelf = feature_row(batch, recipe, run)
+    estimate = predict(entry.snapshot, planned_features(entry.snapshot, minutes, pressure, shelf))
+    verification = ReworkVerification(release_id=entry.id, trial_id=trial.id, run_id=run.id,
+                                      vacuum_minutes=minutes, pressure_pa=pressure, shelf_c=shelf,
+                                      estimate_pct=estimate, submitted_by=actor)
+    db.add(verification)
+    record(db, actor, 'rework.verify',
+           f'{run.source_name} · 方案 #{trial.id} · 实测估计 {estimate:.2f}%', batch.code)
+    db.flush()
+    return verification, True
+
+
+def rework_payload(db, batch, entry):
+    trials = db.scalars(select(ReworkTrial).filter_by(release_id=entry.id).order_by(ReworkTrial.id)).all()
+    verification = verification_for(db, entry.id)
+    verified = None
+    if verification:
+        plan = db.get(ReworkTrial, verification.trial_id)
+        verified = {**row(verification), 'deviation': {
+            'vacuum_minutes': verification.vacuum_minutes - plan.vacuum_minutes,
+            'pressure_pa': round(verification.pressure_pa - plan.pressure_pa, 6),
+            'shelf_c': round(verification.shelf_c - plan.shelf_c, 6),
+            'estimate_pct': round(verification.estimate_pct - plan.estimate_pct, 6),
+        }}
+    run = first_frozen_rework(db, batch, entry.run_id)
+    return {'trials': [row(trial) for trial in trials], 'verification': verified,
+            'rework_run': row(run) if run else None}

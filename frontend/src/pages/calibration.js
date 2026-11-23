@@ -64,6 +64,54 @@ function workflow(data) {
       <button class="primary">签发批次放行</button></form>` : ''}</div></section>`;
 }
 
+function signed(value, digits = 2) {
+  return value == null ? '—' : `${value > 0 ? '+' : ''}${number(value, digits)}`;
+}
+
+function compareTable(rework) {
+  const {verification, trials} = rework;
+  const plan = trials.find(trial => trial.id === verification.trial_id);
+  const diff = verification.deviation;
+  const line = (label, planned, actual, deviation, digits = 2, unit = '') => `<tr><th>${label}</th>
+    <td class="mono">${number(planned, digits)}${unit}</td><td class="mono">${number(actual, digits)}${unit}</td>
+    <td class="mono">${signed(deviation, digits)}</td></tr>`;
+  return `<p class="callout">首炉 ${h(rework.rework_run?.source_name || '')} 已核验，由 ${h(verification.submitted_by)} 于 ${when(verification.submitted_at)} 提交。后补曲线不顶替首炉。</p>
+    <table><thead><tr><th>参数</th><th>计划</th><th>实测（首炉）</th><th>偏差</th></tr></thead><tbody>
+    ${line('真空时长 min', plan.vacuum_minutes, verification.vacuum_minutes, diff.vacuum_minutes, 0)}
+    ${line('平均压力 Pa', plan.pressure_pa, verification.pressure_pa, diff.pressure_pa)}
+    ${line('平均板温 °C', plan.shelf_c, verification.shelf_c, diff.shelf_c)}
+    ${line('估计收缩率', plan.estimate_pct, verification.estimate_pct, diff.estimate_pct, 2, '%')}
+    </tbody></table>`;
+}
+
+function reworkSection(data) {
+  const {entry, rework} = data;
+  if (entry.state !== 'held') return '';
+  const role = store.user.role;
+  const staff = role !== 'viewer';
+  const {trials, verification, rework_run} = rework;
+  const selected = trials.find(trial => trial.selected_by);
+  return `<section class="sheet rework">${sectionTitle('返工预演与首炉核验', `${trials.length} 组方案`)}
+    <div class="padded"><p class="callout">留置后可用原校准单的冻结参考估计候选工况的收缩率。实测偏离计划时曲线照常保存；预演与核验不代替复测与签发放行。</p>
+    ${trials.length ? `<table><thead><tr><th>方案</th><th>真空时长 min</th><th>压力 Pa</th><th>板温 °C</th><th>估计收缩率</th><th>登记</th><th>计划</th></tr></thead><tbody>
+      ${trials.map(trial => `<tr><th class="mono">#${trial.id}</th><td class="mono">${trial.vacuum_minutes}</td>
+      <td class="mono">${number(trial.pressure_pa, 1)}</td><td class="mono">${number(trial.shelf_c, 1)}</td>
+      <td class="mono">${number(trial.estimate_pct)}%</td><td>${h(trial.created_by)}</td>
+      <td>${trial.selected_by ? '<span class="badge" data-state="verified"><i></i>计划</span>'
+        : role === 'supervisor' && !verification ? `<button class="text-button" data-action="selectTrial" data-id="${trial.id}">选定为计划</button>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
+    ${staff && !verification ? `<details class="entry-form" ${trials.length ? '' : 'open'}><summary>登记预演方案</summary><form data-action="reworkTrial">
+      <label>真空时长 min<input name="vacuum_minutes" type="number" min="1" max="10080" step="1" required></label>
+      <label>平均压力 Pa<input name="pressure_pa" type="number" min="0.01" max="120000" step="0.01" required></label>
+      <label>平均板温 °C<input name="shelf_c" type="number" min="-100" max="100" step="0.01" required></label>
+      <button class="primary">估计收缩率</button></form></details>` : ''}
+    ${verification ? compareTable(rework) : selected
+      ? rework_run ? staff ? `<button class="primary" data-action="verifyRework">以首炉 ${h(rework_run.source_name)} 提交核验</button>`
+        : `<p class="empty">首炉 ${h(rework_run.source_name)} 已冻结，等待班组提交核验。</p>`
+        : '<p class="empty">等待首个返工炉次曲线冻结后提交核验。</p>'
+      : trials.length ? '<p class="empty">等待主管选定一组方案作为返工计划。</p>'
+      : '<p class="empty">登记若干组候选工况，比较估计收缩率后由主管选定计划。</p>'}</div></section>`;
+}
+
 export function releasePage() {
   const data = store.calibration;
   if (!data) return `${pageTitle('放行台账', '按校准单核对预测、复测与最终签发。')}
@@ -81,7 +129,7 @@ export function releasePage() {
       <div><dt>Ridge α / 求解器</dt><dd class="mono">${number(entry.result?.alpha, 2)} / ${h(entry.result?.solver || '—')}</dd></div><div><dt>复现种子</dt><dd class="mono">${h(entry.result?.seed || '—')}</dd></div></dl>
       <details class="entry-form evidence-details"><summary>参考批次与快照指纹</summary><ul>${entry.snapshot.training.map(reference => `<li><span class="mono">${h(reference.batch)}</span> <span>${number(reference.observed)}%</span></li>`).join('')}</ul>
       <p class="hash mono">${h(entry.input_hash)}</p></details></div></section>
-    </div><div>${workflow(data)}<section class="sheet history">${sectionTitle('批次审计记录')}
+    </div><div>${workflow(data)}${reworkSection(data)}<section class="sheet history">${sectionTitle('批次审计记录')}
       <ol>${data.events.map(event => `<li><b>${h(events[event.action] || (event.action.endsWith('.blocked') ? '操作拒绝' : event.action))}</b><time>${when(event.happened_at)}</time>
       <p>${h(event.actor)} · ${h(event.detail)}</p></li>`).join('')}</ol></section></div></div>`;
 }
